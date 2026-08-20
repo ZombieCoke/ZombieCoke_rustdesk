@@ -18,6 +18,7 @@ on:
 # in this file!
 
 env:
+  CUSTOM_APP_NAME: "${{ secrets.CUSTOM_APP_NAME }}"
   RENDEZVOUS_SERVER: "${{ secrets.RENDEZVOUS_SERVER }}"
   RS_PUB_KEY: "${{ secrets.RS_PUB_KEY }}"
   RELAY_SERVER: "${{ secrets.RELAY_SERVER }}"
@@ -68,7 +69,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server and Key
+      - name: Inject Custom Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
@@ -77,11 +78,14 @@ jobs:
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
+          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
           targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
           for path in targets:
               if not os.path.isfile(path): continue
               with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
               orig = content
+              if custom_app_name:
+                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
               if server:
                   content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
                   content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
@@ -179,7 +183,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server and Key
+      - name: Inject Custom Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
@@ -188,11 +192,14 @@ jobs:
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
+          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
           targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
           for path in targets:
               if not os.path.isfile(path): continue
               with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
               orig = content
+              if custom_app_name:
+                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
               if server:
                   content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
                   content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
@@ -499,7 +506,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server and Key
+      - name: Inject Custom Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
@@ -508,11 +515,14 @@ jobs:
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
+          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
           targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
           for path in targets:
               if not os.path.isfile(path): continue
               with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
               orig = content
+              if custom_app_name:
+                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
               if server:
                   content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
                   content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
@@ -679,7 +689,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server and Key
+      - name: Inject Custom Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
@@ -688,11 +698,14 @@ jobs:
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
+          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
           targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
           for path in targets:
               if not os.path.isfile(path): continue
               with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
               orig = content
+              if custom_app_name:
+                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
               if server:
                   content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
                   content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
@@ -835,7 +848,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server and Key
+      - name: Inject Custom Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
@@ -844,11 +857,14 @@ jobs:
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
+          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
           targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
           for path in targets:
               if not os.path.isfile(path): continue
               with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
               orig = content
+              if custom_app_name:
+                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
               if server:
                   content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
                   content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
@@ -1178,7 +1194,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server and Key
+      - name: Inject Custom Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
@@ -1187,11 +1203,14 @@ jobs:
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
+          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
           targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
           for path in targets:
               if not os.path.isfile(path): continue
               with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
               orig = content
+              if custom_app_name:
+                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
               if server:
                   content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
                   content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
@@ -1480,7 +1499,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server and Key
+      - name: Inject Custom Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
@@ -1489,11 +1508,14 @@ jobs:
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
+          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
           targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
           for path in targets:
               if not os.path.isfile(path): continue
               with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
               orig = content
+              if custom_app_name:
+                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
               if server:
                   content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
                   content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
@@ -1676,7 +1698,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server and Key
+      - name: Inject Custom Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
@@ -1685,11 +1707,14 @@ jobs:
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
+          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
           targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
           for path in targets:
               if not os.path.isfile(path): continue
               with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
               orig = content
+              if custom_app_name:
+                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
               if server:
                   content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
                   content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
@@ -2023,7 +2048,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server and Key
+      - name: Inject Custom Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
@@ -2032,11 +2057,14 @@ jobs:
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
+          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
           targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
           for path in targets:
               if not os.path.isfile(path): continue
               with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
               orig = content
+              if custom_app_name:
+                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
               if server:
                   content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
                   content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
@@ -2332,7 +2360,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server and Key
+      - name: Inject Custom Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
@@ -2341,11 +2369,14 @@ jobs:
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
+          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
           targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
           for path in targets:
               if not os.path.isfile(path): continue
               with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
               orig = content
+              if custom_app_name:
+                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
               if server:
                   content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
                   content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
@@ -2562,7 +2593,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server and Key
+      - name: Inject Custom Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
@@ -2571,11 +2602,14 @@ jobs:
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
+          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
           targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
           for path in targets:
               if not os.path.isfile(path): continue
               with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
               orig = content
+              if custom_app_name:
+                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
               if server:
                   content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
                   content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
@@ -2665,7 +2699,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server and Key
+      - name: Inject Custom Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
@@ -2674,11 +2708,14 @@ jobs:
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
+          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
           targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
           for path in targets:
               if not os.path.isfile(path): continue
               with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
               orig = content
+              if custom_app_name:
+                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
               if server:
                   content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
                   content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
@@ -2755,7 +2792,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server and Key
+      - name: Inject Custom Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
@@ -2764,11 +2801,14 @@ jobs:
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
+          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
           targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
           for path in targets:
               if not os.path.isfile(path): continue
               with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
               orig = content
+              if custom_app_name:
+                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
               if server:
                   content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
                   content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
