@@ -19,6 +19,7 @@ on:
 
 env:
   CUSTOM_APP_NAME: "${{ secrets.CUSTOM_APP_NAME }}"
+  CUSTOM_CONFIG_DIR: "${{ secrets.CUSTOM_CONFIG_DIR }}"
   RENDEZVOUS_SERVER: "${{ secrets.RENDEZVOUS_SERVER }}"
   RS_PUB_KEY: "${{ secrets.RS_PUB_KEY }}"
   RELAY_SERVER: "${{ secrets.RELAY_SERVER }}"
@@ -69,37 +70,82 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server, Key and App Name
+      - name: Inject Custom Config, Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
           import os, glob, re
+
           server = os.environ.get("RENDEZVOUS_SERVER", "").strip()
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
-          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
-          targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
-          for path in targets:
-              if not os.path.isfile(path): continue
-              with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+          custom_app = os.environ.get("CUSTOM_APP_NAME", "").strip()
+          custom_folder = os.environ.get("CUSTOM_CONFIG_DIR", "").strip() or custom_app
+
+          print(f"[CI-CONFIG] Injected -> Server: {bool(server)}, Key: {bool(key)}, Custom App: {custom_app}, Custom Folder: {custom_folder}")
+
+          all_rs = glob.glob("**/*.rs", recursive=True)
+
+          for path in all_rs:
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      content = f.read()
+              except Exception:
+                  continue
+
               orig = content
-              if custom_app_name:
-                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
+
+              # 1. 替换默认服务器
               if server:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + server + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)', r'\g<1>"' + server + r'"\g<2>', content)
+              # 2. 替换公钥
               if key:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+              # 3. 替换中继
               if relay:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{relay}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + relay + '";', content)
+              # 4. 替换 API Server
               if api:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
-                  content = re.sub(r"(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+                  content = re.sub(r'(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+
+              # 5. 替换 APP_NAME (基础应用名)
+              if custom_app:
+                  content = re.sub(r'(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+                  content = re.sub(r'(const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+
+              # 6. 强制替换配置文件夹路径 (覆盖 ProjectDirs 构造和写死目录)
+              if custom_folder:
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*APP_NAME\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*"RustDesk"\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+
               if content != orig:
-                  with open(path, "w", encoding="utf-8") as f: f.write(content)
-                  print(f"Injected custom config into: {path}")
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"[CI-CONFIG] Patched: {path}")
+
+          # 7. 替换原生应用显示名称
+          if custom_app:
+              for p in glob.glob("flutter/windows/runner/*.cpp") + glob.glob("flutter/windows/runner/*.rc"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = c.replace('L"RustDesk"', f'L"{custom_app}"').replace('"RustDesk"', f'"{custom_app}"')
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Windows runner: {p}")
+                  except Exception: pass
+
+              for p in glob.glob("res/*.desktop"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = re.sub(r"^Name=.*", f"Name={custom_app}", c, flags=re.M)
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Linux desktop: {p}")
+                  except Exception: pass
           EOF
       - name: Install Syft
         uses: anchore/sbom-action/download-syft@v0
@@ -183,37 +229,82 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server, Key and App Name
+      - name: Inject Custom Config, Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
           import os, glob, re
+
           server = os.environ.get("RENDEZVOUS_SERVER", "").strip()
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
-          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
-          targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
-          for path in targets:
-              if not os.path.isfile(path): continue
-              with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+          custom_app = os.environ.get("CUSTOM_APP_NAME", "").strip()
+          custom_folder = os.environ.get("CUSTOM_CONFIG_DIR", "").strip() or custom_app
+
+          print(f"[CI-CONFIG] Injected -> Server: {bool(server)}, Key: {bool(key)}, Custom App: {custom_app}, Custom Folder: {custom_folder}")
+
+          all_rs = glob.glob("**/*.rs", recursive=True)
+
+          for path in all_rs:
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      content = f.read()
+              except Exception:
+                  continue
+
               orig = content
-              if custom_app_name:
-                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
+
+              # 1. 替换默认服务器
               if server:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + server + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)', r'\g<1>"' + server + r'"\g<2>', content)
+              # 2. 替换公钥
               if key:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+              # 3. 替换中继
               if relay:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{relay}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + relay + '";', content)
+              # 4. 替换 API Server
               if api:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
-                  content = re.sub(r"(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+                  content = re.sub(r'(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+
+              # 5. 替换 APP_NAME (基础应用名)
+              if custom_app:
+                  content = re.sub(r'(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+                  content = re.sub(r'(const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+
+              # 6. 强制替换配置文件夹路径 (覆盖 ProjectDirs 构造和写死目录)
+              if custom_folder:
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*APP_NAME\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*"RustDesk"\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+
               if content != orig:
-                  with open(path, "w", encoding="utf-8") as f: f.write(content)
-                  print(f"Injected custom config into: {path}")
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"[CI-CONFIG] Patched: {path}")
+
+          # 7. 替换原生应用显示名称
+          if custom_app:
+              for p in glob.glob("flutter/windows/runner/*.cpp") + glob.glob("flutter/windows/runner/*.rc"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = c.replace('L"RustDesk"', f'L"{custom_app}"').replace('"RustDesk"', f'"{custom_app}"')
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Windows runner: {p}")
+                  except Exception: pass
+
+              for p in glob.glob("res/*.desktop"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = re.sub(r"^Name=.*", f"Name={custom_app}", c, flags=re.M)
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Linux desktop: {p}")
+                  except Exception: pass
           EOF
       - name: Restore bridge files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -506,37 +597,82 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server, Key and App Name
+      - name: Inject Custom Config, Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
           import os, glob, re
+
           server = os.environ.get("RENDEZVOUS_SERVER", "").strip()
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
-          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
-          targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
-          for path in targets:
-              if not os.path.isfile(path): continue
-              with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+          custom_app = os.environ.get("CUSTOM_APP_NAME", "").strip()
+          custom_folder = os.environ.get("CUSTOM_CONFIG_DIR", "").strip() or custom_app
+
+          print(f"[CI-CONFIG] Injected -> Server: {bool(server)}, Key: {bool(key)}, Custom App: {custom_app}, Custom Folder: {custom_folder}")
+
+          all_rs = glob.glob("**/*.rs", recursive=True)
+
+          for path in all_rs:
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      content = f.read()
+              except Exception:
+                  continue
+
               orig = content
-              if custom_app_name:
-                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
+
+              # 1. 替换默认服务器
               if server:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + server + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)', r'\g<1>"' + server + r'"\g<2>', content)
+              # 2. 替换公钥
               if key:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+              # 3. 替换中继
               if relay:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{relay}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + relay + '";', content)
+              # 4. 替换 API Server
               if api:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
-                  content = re.sub(r"(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+                  content = re.sub(r'(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+
+              # 5. 替换 APP_NAME (基础应用名)
+              if custom_app:
+                  content = re.sub(r'(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+                  content = re.sub(r'(const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+
+              # 6. 强制替换配置文件夹路径 (覆盖 ProjectDirs 构造和写死目录)
+              if custom_folder:
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*APP_NAME\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*"RustDesk"\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+
               if content != orig:
-                  with open(path, "w", encoding="utf-8") as f: f.write(content)
-                  print(f"Injected custom config into: {path}")
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"[CI-CONFIG] Patched: {path}")
+
+          # 7. 替换原生应用显示名称
+          if custom_app:
+              for p in glob.glob("flutter/windows/runner/*.cpp") + glob.glob("flutter/windows/runner/*.rc"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = c.replace('L"RustDesk"', f'L"{custom_app}"').replace('"RustDesk"', f'"{custom_app}"')
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Windows runner: {p}")
+                  except Exception: pass
+
+              for p in glob.glob("res/*.desktop"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = re.sub(r"^Name=.*", f"Name={custom_app}", c, flags=re.M)
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Linux desktop: {p}")
+                  except Exception: pass
           EOF
       - name: Install LLVM and Clang
         uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce # no release tag; commit 2026-05-26
@@ -689,37 +825,82 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server, Key and App Name
+      - name: Inject Custom Config, Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
           import os, glob, re
+
           server = os.environ.get("RENDEZVOUS_SERVER", "").strip()
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
-          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
-          targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
-          for path in targets:
-              if not os.path.isfile(path): continue
-              with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+          custom_app = os.environ.get("CUSTOM_APP_NAME", "").strip()
+          custom_folder = os.environ.get("CUSTOM_CONFIG_DIR", "").strip() or custom_app
+
+          print(f"[CI-CONFIG] Injected -> Server: {bool(server)}, Key: {bool(key)}, Custom App: {custom_app}, Custom Folder: {custom_folder}")
+
+          all_rs = glob.glob("**/*.rs", recursive=True)
+
+          for path in all_rs:
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      content = f.read()
+              except Exception:
+                  continue
+
               orig = content
-              if custom_app_name:
-                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
+
+              # 1. 替换默认服务器
               if server:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + server + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)', r'\g<1>"' + server + r'"\g<2>', content)
+              # 2. 替换公钥
               if key:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+              # 3. 替换中继
               if relay:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{relay}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + relay + '";', content)
+              # 4. 替换 API Server
               if api:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
-                  content = re.sub(r"(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+                  content = re.sub(r'(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+
+              # 5. 替换 APP_NAME (基础应用名)
+              if custom_app:
+                  content = re.sub(r'(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+                  content = re.sub(r'(const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+
+              # 6. 强制替换配置文件夹路径 (覆盖 ProjectDirs 构造和写死目录)
+              if custom_folder:
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*APP_NAME\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*"RustDesk"\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+
               if content != orig:
-                  with open(path, "w", encoding="utf-8") as f: f.write(content)
-                  print(f"Injected custom config into: {path}")
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"[CI-CONFIG] Patched: {path}")
+
+          # 7. 替换原生应用显示名称
+          if custom_app:
+              for p in glob.glob("flutter/windows/runner/*.cpp") + glob.glob("flutter/windows/runner/*.rc"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = c.replace('L"RustDesk"', f'L"{custom_app}"').replace('"RustDesk"', f'"{custom_app}"')
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Windows runner: {p}")
+                  except Exception: pass
+
+              for p in glob.glob("res/*.desktop"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = re.sub(r"^Name=.*", f"Name={custom_app}", c, flags=re.M)
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Linux desktop: {p}")
+                  except Exception: pass
           EOF
       - name: Install flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
@@ -848,37 +1029,82 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server, Key and App Name
+      - name: Inject Custom Config, Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
           import os, glob, re
+
           server = os.environ.get("RENDEZVOUS_SERVER", "").strip()
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
-          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
-          targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
-          for path in targets:
-              if not os.path.isfile(path): continue
-              with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+          custom_app = os.environ.get("CUSTOM_APP_NAME", "").strip()
+          custom_folder = os.environ.get("CUSTOM_CONFIG_DIR", "").strip() or custom_app
+
+          print(f"[CI-CONFIG] Injected -> Server: {bool(server)}, Key: {bool(key)}, Custom App: {custom_app}, Custom Folder: {custom_folder}")
+
+          all_rs = glob.glob("**/*.rs", recursive=True)
+
+          for path in all_rs:
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      content = f.read()
+              except Exception:
+                  continue
+
               orig = content
-              if custom_app_name:
-                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
+
+              # 1. 替换默认服务器
               if server:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + server + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)', r'\g<1>"' + server + r'"\g<2>', content)
+              # 2. 替换公钥
               if key:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+              # 3. 替换中继
               if relay:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{relay}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + relay + '";', content)
+              # 4. 替换 API Server
               if api:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
-                  content = re.sub(r"(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+                  content = re.sub(r'(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+
+              # 5. 替换 APP_NAME (基础应用名)
+              if custom_app:
+                  content = re.sub(r'(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+                  content = re.sub(r'(const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+
+              # 6. 强制替换配置文件夹路径 (覆盖 ProjectDirs 构造和写死目录)
+              if custom_folder:
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*APP_NAME\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*"RustDesk"\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+
               if content != orig:
-                  with open(path, "w", encoding="utf-8") as f: f.write(content)
-                  print(f"Injected custom config into: {path}")
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"[CI-CONFIG] Patched: {path}")
+
+          # 7. 替换原生应用显示名称
+          if custom_app:
+              for p in glob.glob("flutter/windows/runner/*.cpp") + glob.glob("flutter/windows/runner/*.rc"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = c.replace('L"RustDesk"', f'L"{custom_app}"').replace('"RustDesk"', f'"{custom_app}"')
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Windows runner: {p}")
+                  except Exception: pass
+
+              for p in glob.glob("res/*.desktop"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = re.sub(r"^Name=.*", f"Name={custom_app}", c, flags=re.M)
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Linux desktop: {p}")
+                  except Exception: pass
           EOF
       - name: Import the codesign cert
         if: env.MACOS_P12_BASE64 != null
@@ -1194,37 +1420,82 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server, Key and App Name
+      - name: Inject Custom Config, Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
           import os, glob, re
+
           server = os.environ.get("RENDEZVOUS_SERVER", "").strip()
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
-          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
-          targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
-          for path in targets:
-              if not os.path.isfile(path): continue
-              with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+          custom_app = os.environ.get("CUSTOM_APP_NAME", "").strip()
+          custom_folder = os.environ.get("CUSTOM_CONFIG_DIR", "").strip() or custom_app
+
+          print(f"[CI-CONFIG] Injected -> Server: {bool(server)}, Key: {bool(key)}, Custom App: {custom_app}, Custom Folder: {custom_folder}")
+
+          all_rs = glob.glob("**/*.rs", recursive=True)
+
+          for path in all_rs:
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      content = f.read()
+              except Exception:
+                  continue
+
               orig = content
-              if custom_app_name:
-                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
+
+              # 1. 替换默认服务器
               if server:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + server + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)', r'\g<1>"' + server + r'"\g<2>', content)
+              # 2. 替换公钥
               if key:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+              # 3. 替换中继
               if relay:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{relay}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + relay + '";', content)
+              # 4. 替换 API Server
               if api:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
-                  content = re.sub(r"(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+                  content = re.sub(r'(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+
+              # 5. 替换 APP_NAME (基础应用名)
+              if custom_app:
+                  content = re.sub(r'(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+                  content = re.sub(r'(const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+
+              # 6. 强制替换配置文件夹路径 (覆盖 ProjectDirs 构造和写死目录)
+              if custom_folder:
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*APP_NAME\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*"RustDesk"\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+
               if content != orig:
-                  with open(path, "w", encoding="utf-8") as f: f.write(content)
-                  print(f"Injected custom config into: {path}")
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"[CI-CONFIG] Patched: {path}")
+
+          # 7. 替换原生应用显示名称
+          if custom_app:
+              for p in glob.glob("flutter/windows/runner/*.cpp") + glob.glob("flutter/windows/runner/*.rc"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = c.replace('L"RustDesk"', f'L"{custom_app}"').replace('"RustDesk"', f'"{custom_app}"')
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Windows runner: {p}")
+                  except Exception: pass
+
+              for p in glob.glob("res/*.desktop"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = re.sub(r"^Name=.*", f"Name={custom_app}", c, flags=re.M)
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Linux desktop: {p}")
+                  except Exception: pass
           EOF
       - name: Install flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
@@ -1499,37 +1770,82 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server, Key and App Name
+      - name: Inject Custom Config, Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
           import os, glob, re
+
           server = os.environ.get("RENDEZVOUS_SERVER", "").strip()
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
-          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
-          targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
-          for path in targets:
-              if not os.path.isfile(path): continue
-              with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+          custom_app = os.environ.get("CUSTOM_APP_NAME", "").strip()
+          custom_folder = os.environ.get("CUSTOM_CONFIG_DIR", "").strip() or custom_app
+
+          print(f"[CI-CONFIG] Injected -> Server: {bool(server)}, Key: {bool(key)}, Custom App: {custom_app}, Custom Folder: {custom_folder}")
+
+          all_rs = glob.glob("**/*.rs", recursive=True)
+
+          for path in all_rs:
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      content = f.read()
+              except Exception:
+                  continue
+
               orig = content
-              if custom_app_name:
-                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
+
+              # 1. 替换默认服务器
               if server:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + server + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)', r'\g<1>"' + server + r'"\g<2>', content)
+              # 2. 替换公钥
               if key:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+              # 3. 替换中继
               if relay:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{relay}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + relay + '";', content)
+              # 4. 替换 API Server
               if api:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
-                  content = re.sub(r"(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+                  content = re.sub(r'(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+
+              # 5. 替换 APP_NAME (基础应用名)
+              if custom_app:
+                  content = re.sub(r'(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+                  content = re.sub(r'(const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+
+              # 6. 强制替换配置文件夹路径 (覆盖 ProjectDirs 构造和写死目录)
+              if custom_folder:
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*APP_NAME\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*"RustDesk"\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+
               if content != orig:
-                  with open(path, "w", encoding="utf-8") as f: f.write(content)
-                  print(f"Injected custom config into: {path}")
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"[CI-CONFIG] Patched: {path}")
+
+          # 7. 替换原生应用显示名称
+          if custom_app:
+              for p in glob.glob("flutter/windows/runner/*.cpp") + glob.glob("flutter/windows/runner/*.rc"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = c.replace('L"RustDesk"', f'L"{custom_app}"').replace('"RustDesk"', f'"{custom_app}"')
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Windows runner: {p}")
+                  except Exception: pass
+
+              for p in glob.glob("res/*.desktop"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = re.sub(r"^Name=.*", f"Name={custom_app}", c, flags=re.M)
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Linux desktop: {p}")
+                  except Exception: pass
           EOF
       - name: Install flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
@@ -1698,37 +2014,82 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server, Key and App Name
+      - name: Inject Custom Config, Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
           import os, glob, re
+
           server = os.environ.get("RENDEZVOUS_SERVER", "").strip()
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
-          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
-          targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
-          for path in targets:
-              if not os.path.isfile(path): continue
-              with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+          custom_app = os.environ.get("CUSTOM_APP_NAME", "").strip()
+          custom_folder = os.environ.get("CUSTOM_CONFIG_DIR", "").strip() or custom_app
+
+          print(f"[CI-CONFIG] Injected -> Server: {bool(server)}, Key: {bool(key)}, Custom App: {custom_app}, Custom Folder: {custom_folder}")
+
+          all_rs = glob.glob("**/*.rs", recursive=True)
+
+          for path in all_rs:
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      content = f.read()
+              except Exception:
+                  continue
+
               orig = content
-              if custom_app_name:
-                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
+
+              # 1. 替换默认服务器
               if server:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + server + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)', r'\g<1>"' + server + r'"\g<2>', content)
+              # 2. 替换公钥
               if key:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+              # 3. 替换中继
               if relay:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{relay}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + relay + '";', content)
+              # 4. 替换 API Server
               if api:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
-                  content = re.sub(r"(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+                  content = re.sub(r'(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+
+              # 5. 替换 APP_NAME (基础应用名)
+              if custom_app:
+                  content = re.sub(r'(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+                  content = re.sub(r'(const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+
+              # 6. 强制替换配置文件夹路径 (覆盖 ProjectDirs 构造和写死目录)
+              if custom_folder:
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*APP_NAME\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*"RustDesk"\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+
               if content != orig:
-                  with open(path, "w", encoding="utf-8") as f: f.write(content)
-                  print(f"Injected custom config into: {path}")
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"[CI-CONFIG] Patched: {path}")
+
+          # 7. 替换原生应用显示名称
+          if custom_app:
+              for p in glob.glob("flutter/windows/runner/*.cpp") + glob.glob("flutter/windows/runner/*.rc"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = c.replace('L"RustDesk"', f'L"{custom_app}"').replace('"RustDesk"', f'"{custom_app}"')
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Windows runner: {p}")
+                  except Exception: pass
+
+              for p in glob.glob("res/*.desktop"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = re.sub(r"^Name=.*", f"Name={custom_app}", c, flags=re.M)
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Linux desktop: {p}")
+                  except Exception: pass
           EOF
       - name: Set Swap Space
         if: ${{ matrix.job.arch == 'x86_64' }}
@@ -2048,37 +2409,82 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server, Key and App Name
+      - name: Inject Custom Config, Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
           import os, glob, re
+
           server = os.environ.get("RENDEZVOUS_SERVER", "").strip()
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
-          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
-          targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
-          for path in targets:
-              if not os.path.isfile(path): continue
-              with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+          custom_app = os.environ.get("CUSTOM_APP_NAME", "").strip()
+          custom_folder = os.environ.get("CUSTOM_CONFIG_DIR", "").strip() or custom_app
+
+          print(f"[CI-CONFIG] Injected -> Server: {bool(server)}, Key: {bool(key)}, Custom App: {custom_app}, Custom Folder: {custom_folder}")
+
+          all_rs = glob.glob("**/*.rs", recursive=True)
+
+          for path in all_rs:
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      content = f.read()
+              except Exception:
+                  continue
+
               orig = content
-              if custom_app_name:
-                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
+
+              # 1. 替换默认服务器
               if server:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + server + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)', r'\g<1>"' + server + r'"\g<2>', content)
+              # 2. 替换公钥
               if key:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+              # 3. 替换中继
               if relay:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{relay}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + relay + '";', content)
+              # 4. 替换 API Server
               if api:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
-                  content = re.sub(r"(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+                  content = re.sub(r'(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+
+              # 5. 替换 APP_NAME (基础应用名)
+              if custom_app:
+                  content = re.sub(r'(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+                  content = re.sub(r'(const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+
+              # 6. 强制替换配置文件夹路径 (覆盖 ProjectDirs 构造和写死目录)
+              if custom_folder:
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*APP_NAME\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*"RustDesk"\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+
               if content != orig:
-                  with open(path, "w", encoding="utf-8") as f: f.write(content)
-                  print(f"Injected custom config into: {path}")
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"[CI-CONFIG] Patched: {path}")
+
+          # 7. 替换原生应用显示名称
+          if custom_app:
+              for p in glob.glob("flutter/windows/runner/*.cpp") + glob.glob("flutter/windows/runner/*.rc"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = c.replace('L"RustDesk"', f'L"{custom_app}"').replace('"RustDesk"', f'"{custom_app}"')
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Windows runner: {p}")
+                  except Exception: pass
+
+              for p in glob.glob("res/*.desktop"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = re.sub(r"^Name=.*", f"Name={custom_app}", c, flags=re.M)
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Linux desktop: {p}")
+                  except Exception: pass
           EOF
       - name: Set Swap Space
         uses: pierotofy/set-swap-space@49819abfb41bd9b44fb781159c033dba90353a7c # v1.0
@@ -2360,37 +2766,82 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server, Key and App Name
+      - name: Inject Custom Config, Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
           import os, glob, re
+
           server = os.environ.get("RENDEZVOUS_SERVER", "").strip()
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
-          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
-          targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
-          for path in targets:
-              if not os.path.isfile(path): continue
-              with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+          custom_app = os.environ.get("CUSTOM_APP_NAME", "").strip()
+          custom_folder = os.environ.get("CUSTOM_CONFIG_DIR", "").strip() or custom_app
+
+          print(f"[CI-CONFIG] Injected -> Server: {bool(server)}, Key: {bool(key)}, Custom App: {custom_app}, Custom Folder: {custom_folder}")
+
+          all_rs = glob.glob("**/*.rs", recursive=True)
+
+          for path in all_rs:
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      content = f.read()
+              except Exception:
+                  continue
+
               orig = content
-              if custom_app_name:
-                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
+
+              # 1. 替换默认服务器
               if server:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + server + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)', r'\g<1>"' + server + r'"\g<2>', content)
+              # 2. 替换公钥
               if key:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+              # 3. 替换中继
               if relay:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{relay}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + relay + '";', content)
+              # 4. 替换 API Server
               if api:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
-                  content = re.sub(r"(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+                  content = re.sub(r'(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+
+              # 5. 替换 APP_NAME (基础应用名)
+              if custom_app:
+                  content = re.sub(r'(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+                  content = re.sub(r'(const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+
+              # 6. 强制替换配置文件夹路径 (覆盖 ProjectDirs 构造和写死目录)
+              if custom_folder:
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*APP_NAME\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*"RustDesk"\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+
               if content != orig:
-                  with open(path, "w", encoding="utf-8") as f: f.write(content)
-                  print(f"Injected custom config into: {path}")
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"[CI-CONFIG] Patched: {path}")
+
+          # 7. 替换原生应用显示名称
+          if custom_app:
+              for p in glob.glob("flutter/windows/runner/*.cpp") + glob.glob("flutter/windows/runner/*.rc"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = c.replace('L"RustDesk"', f'L"{custom_app}"').replace('"RustDesk"', f'"{custom_app}"')
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Windows runner: {p}")
+                  except Exception: pass
+
+              for p in glob.glob("res/*.desktop"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = re.sub(r"^Name=.*", f"Name={custom_app}", c, flags=re.M)
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Linux desktop: {p}")
+                  except Exception: pass
           EOF
       - name: Modify vcpkg.json for armv7
         if: matrix.job.vcpkg-triplet == 'arm-linux'
@@ -2593,37 +3044,82 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server, Key and App Name
+      - name: Inject Custom Config, Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
           import os, glob, re
+
           server = os.environ.get("RENDEZVOUS_SERVER", "").strip()
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
-          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
-          targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
-          for path in targets:
-              if not os.path.isfile(path): continue
-              with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+          custom_app = os.environ.get("CUSTOM_APP_NAME", "").strip()
+          custom_folder = os.environ.get("CUSTOM_CONFIG_DIR", "").strip() or custom_app
+
+          print(f"[CI-CONFIG] Injected -> Server: {bool(server)}, Key: {bool(key)}, Custom App: {custom_app}, Custom Folder: {custom_folder}")
+
+          all_rs = glob.glob("**/*.rs", recursive=True)
+
+          for path in all_rs:
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      content = f.read()
+              except Exception:
+                  continue
+
               orig = content
-              if custom_app_name:
-                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
+
+              # 1. 替换默认服务器
               if server:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + server + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)', r'\g<1>"' + server + r'"\g<2>', content)
+              # 2. 替换公钥
               if key:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+              # 3. 替换中继
               if relay:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{relay}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + relay + '";', content)
+              # 4. 替换 API Server
               if api:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
-                  content = re.sub(r"(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+                  content = re.sub(r'(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+
+              # 5. 替换 APP_NAME (基础应用名)
+              if custom_app:
+                  content = re.sub(r'(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+                  content = re.sub(r'(const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+
+              # 6. 强制替换配置文件夹路径 (覆盖 ProjectDirs 构造和写死目录)
+              if custom_folder:
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*APP_NAME\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*"RustDesk"\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+
               if content != orig:
-                  with open(path, "w", encoding="utf-8") as f: f.write(content)
-                  print(f"Injected custom config into: {path}")
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"[CI-CONFIG] Patched: {path}")
+
+          # 7. 替换原生应用显示名称
+          if custom_app:
+              for p in glob.glob("flutter/windows/runner/*.cpp") + glob.glob("flutter/windows/runner/*.rc"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = c.replace('L"RustDesk"', f'L"{custom_app}"').replace('"RustDesk"', f'"{custom_app}"')
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Windows runner: {p}")
+                  except Exception: pass
+
+              for p in glob.glob("res/*.desktop"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = re.sub(r"^Name=.*", f"Name={custom_app}", c, flags=re.M)
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Linux desktop: {p}")
+                  except Exception: pass
           EOF
       - name: Download Binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -2699,37 +3195,82 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server, Key and App Name
+      - name: Inject Custom Config, Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
           import os, glob, re
+
           server = os.environ.get("RENDEZVOUS_SERVER", "").strip()
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
-          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
-          targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
-          for path in targets:
-              if not os.path.isfile(path): continue
-              with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+          custom_app = os.environ.get("CUSTOM_APP_NAME", "").strip()
+          custom_folder = os.environ.get("CUSTOM_CONFIG_DIR", "").strip() or custom_app
+
+          print(f"[CI-CONFIG] Injected -> Server: {bool(server)}, Key: {bool(key)}, Custom App: {custom_app}, Custom Folder: {custom_folder}")
+
+          all_rs = glob.glob("**/*.rs", recursive=True)
+
+          for path in all_rs:
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      content = f.read()
+              except Exception:
+                  continue
+
               orig = content
-              if custom_app_name:
-                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
+
+              # 1. 替换默认服务器
               if server:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + server + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)', r'\g<1>"' + server + r'"\g<2>', content)
+              # 2. 替换公钥
               if key:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+              # 3. 替换中继
               if relay:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{relay}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + relay + '";', content)
+              # 4. 替换 API Server
               if api:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
-                  content = re.sub(r"(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+                  content = re.sub(r'(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+
+              # 5. 替换 APP_NAME (基础应用名)
+              if custom_app:
+                  content = re.sub(r'(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+                  content = re.sub(r'(const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+
+              # 6. 强制替换配置文件夹路径 (覆盖 ProjectDirs 构造和写死目录)
+              if custom_folder:
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*APP_NAME\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*"RustDesk"\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+
               if content != orig:
-                  with open(path, "w", encoding="utf-8") as f: f.write(content)
-                  print(f"Injected custom config into: {path}")
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"[CI-CONFIG] Patched: {path}")
+
+          # 7. 替换原生应用显示名称
+          if custom_app:
+              for p in glob.glob("flutter/windows/runner/*.cpp") + glob.glob("flutter/windows/runner/*.rc"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = c.replace('L"RustDesk"', f'L"{custom_app}"').replace('"RustDesk"', f'"{custom_app}"')
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Windows runner: {p}")
+                  except Exception: pass
+
+              for p in glob.glob("res/*.desktop"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = re.sub(r"^Name=.*", f"Name={custom_app}", c, flags=re.M)
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Linux desktop: {p}")
+                  except Exception: pass
           EOF
       - name: Download Binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -2792,37 +3333,82 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Inject Custom Server, Key and App Name
+      - name: Inject Custom Config, Server, Key and App Name
         shell: bash
         run: |
           python3 - << 'EOF'
           import os, glob, re
+
           server = os.environ.get("RENDEZVOUS_SERVER", "").strip()
           key = os.environ.get("RS_PUB_KEY", "").strip()
           relay = os.environ.get("RELAY_SERVER", "").strip()
           api = os.environ.get("API_SERVER", "").strip()
-          custom_app_name = os.environ.get("CUSTOM_APP_NAME", "").strip()
-          targets = set(glob.glob("libs/**/config.rs", recursive=True) + glob.glob("src/common.rs"))
-          for path in targets:
-              if not os.path.isfile(path): continue
-              with open(path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+          custom_app = os.environ.get("CUSTOM_APP_NAME", "").strip()
+          custom_folder = os.environ.get("CUSTOM_CONFIG_DIR", "").strip() or custom_app
+
+          print(f"[CI-CONFIG] Injected -> Server: {bool(server)}, Key: {bool(key)}, Custom App: {custom_app}, Custom Folder: {custom_folder}")
+
+          all_rs = glob.glob("**/*.rs", recursive=True)
+
+          for path in all_rs:
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      content = f.read()
+              except Exception:
+                  continue
+
               orig = content
-              if custom_app_name:
-                  content = re.sub(r"(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{custom_app_name}\";", content)
+
+              # 1. 替换默认服务器
               if server:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{server}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)", f"\\1\"{server}\"\\2", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + server + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RENDEZVOUS_SERVERS\s*:\s*&\[&str\]\s*=\s*&\[)[^\]]*(\];)', r'\g<1>"' + server + r'"\g<2>', content)
+              # 2. 替换公钥
               if key:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
-                  content = re.sub(r"(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{key}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+                  content = re.sub(r'(pub\s+const\s+RS_PUB_KEY\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + key + '";', content)
+              # 3. 替换中继
               if relay:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{relay}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_RELAY_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + relay + '";', content)
+              # 4. 替换 API Server
               if api:
-                  content = re.sub(r"(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
-                  content = re.sub(r"(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;", f"\\1\"{api}\";", content)
+                  content = re.sub(r'(pub\s+const\s+DEFAULT_API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+                  content = re.sub(r'(pub\s+const\s+API_SERVER\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + api + '";', content)
+
+              # 5. 替换 APP_NAME (基础应用名)
+              if custom_app:
+                  content = re.sub(r'(pub\s+const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+                  content = re.sub(r'(const\s+APP_NAME\s*:\s*&str\s*=\s*)[^;]+;', r'\g<1>"' + custom_app + '";', content)
+
+              # 6. 强制替换配置文件夹路径 (覆盖 ProjectDirs 构造和写死目录)
+              if custom_folder:
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*APP_NAME\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+                  content = re.sub(r'ProjectDirs::from\(([^,]+),\s*([^,]+),\s*"RustDesk"\)', r'ProjectDirs::from(\g<1>, \g<2>, "' + custom_folder + '")', content)
+
               if content != orig:
-                  with open(path, "w", encoding="utf-8") as f: f.write(content)
-                  print(f"Injected custom config into: {path}")
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"[CI-CONFIG] Patched: {path}")
+
+          # 7. 替换原生应用显示名称
+          if custom_app:
+              for p in glob.glob("flutter/windows/runner/*.cpp") + glob.glob("flutter/windows/runner/*.rc"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = c.replace('L"RustDesk"', f'L"{custom_app}"').replace('"RustDesk"', f'"{custom_app}"')
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Windows runner: {p}")
+                  except Exception: pass
+
+              for p in glob.glob("res/*.desktop"):
+                  try:
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f: c = f.read()
+                      c2 = re.sub(r"^Name=.*", f"Name={custom_app}", c, flags=re.M)
+                      if c2 != c:
+                          with open(p, "w", encoding="utf-8") as f: f.write(c2)
+                          print(f"[CI-CONFIG] Patched Linux desktop: {p}")
+                  except Exception: pass
           EOF
       - name: Prepare env
         run: |
